@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: ECS Fargate para desacoplando-com-mensageria-aws-sqs (ingestor com ALB + billing consumidor) com IAM granular e Auto Scaling dual (CPU + queue-depth)
+Description: ECS Fargate para desacoplando-com-mensageria-aws-sqs (ingestor com ALB + billing consumidor) com IAM granular e Step Scaling do ingestor por CPU (Min 2 / Max 6)
 
 Parameters:
   IngestorImageUri:
@@ -14,9 +14,6 @@ Parameters:
   BillingQueueArn:
     Type: String
     Description: ARN da billing-queue
-  BillingQueueUrl:
-    Type: String
-    Description: URL da billing-queue
 
 Resources:
   # === VPC e Networking ===
@@ -128,6 +125,7 @@ Resources:
   # === Application Load Balancer (apenas para o ingestor) ===
   IngestorAlb:
     Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    DependsOn: VpcGatewayAttachment
     Properties:
       Name: sqs-poc-alb
       Type: application

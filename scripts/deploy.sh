@@ -81,8 +81,7 @@ aws cloudformation create-stack \
     ParameterKey=IngestorImageUri,ParameterValue="${INGESTOR_REPO_URI}:latest" \
     ParameterKey=BillingImageUri,ParameterValue="${BILLING_REPO_URI}:latest" \
     ParameterKey=BillingQueueName,ParameterValue="$QUEUE_NAME" \
-    ParameterKey=BillingQueueArn,ParameterValue="$QUEUE_ARN" \
-    ParameterKey=BillingQueueUrl,ParameterValue="$QUEUE_URL"
+    ParameterKey=BillingQueueArn,ParameterValue="$QUEUE_ARN"
 
 aws cloudformation wait stack-create-complete --region "$REGION" --stack-name "$ECS_STACK"
 

@@ -83,7 +83,7 @@ aws cloudwatch get-metric-statistics \
   --output table
 ```
 
-**Saída capturada** (billing com ~4 tasks rodando e fila vazia):
+**Saída capturada** (billing com 1 task rodando e fila vazia):
 
 ```
 +----------------+-----------------------------+
