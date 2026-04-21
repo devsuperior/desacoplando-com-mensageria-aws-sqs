@@ -2,18 +2,17 @@
 
 Projeto prático construído a partir do artigo [**Desacoplando sistemas com mensageria no AWS SQS**](https://devsuperior.com.br/blog/desacoplando-sistemas-com-mensageria-no-aws-sqs) da DevSuperior, **Episódio 1 da série "Dominando Mensageria na AWS"**.
 
-Enquanto o artigo sobe tudo localmente com LocalStack, aqui a solução vai para a **AWS real**: ECS Fargate, SQS Standard e ALB via CloudFormation, IAM granular por serviço, teste de estresse com k6 e Step Scaling reagindo à carga em menos de um minuto.
+Enquanto o artigo sobe tudo localmente com LocalStack, aqui você provisionará a solução **em AWS real**: ECS Fargate, SQS Standard, ALB e Auto Scaling reagindo à carga em menos de um minuto.
 
-> 📘 **Guia completo passo a passo:** [DEMO.md](DEMO.md)
+> 📘 **Guia completo passo a passo:** [DEMO.md](DEMO.md)  
 > 🔧 **Tuning do consumidor SQS (batch, polling, ack modes):** [TUNNING-SQS.md](TUNNING-SQS.md)
 
 ## O que muda em relação ao artigo?
 
-- **IAM granular por serviço:** ingestor só publica (`sqs:SendMessage`), billing só consome (`sqs:ReceiveMessage`/`DeleteMessage`).
-- **Correlation-ID trafegando nos headers da fila:** rastreabilidade ponta a ponta do webhook HTTP ao log persistido, via SQS Message Attribute.
-- **Consumo em batch e polling configuráveis** no billing (`max-messages-per-poll`, `poll-timeout`) — detalhes em [TUNNING-SQS.md](TUNNING-SQS.md).
-- **Auto Scaling por queue-depth** no billing (métrica `ApproximateNumberOfMessagesVisible` do SQS), em vez de CPU — escala pelo que realmente importa no consumer.
-- **Teste de estresse com k6** em container disparando até 200 VUs contra o ALB.
+- **IAM granular:** ingestor só publica (`sqs:SendMessage`), billing só consome (`sqs:ReceiveMessage`/`DeleteMessage`).
+- **Rastreabilidade ponta a ponta:** Correlation-ID viaja como SQS Message Attribute do webhook HTTP até o log persistido.
+- **Tuning do consumo em runtime:** batch, polling e ack modes ajustáveis sem rebuild (detalhes em [TUNNING-SQS.md](TUNNING-SQS.md)).
+- **Auto Scaling do ingestor por CPU** com Step Scaling (degraus `+1` / `+2` tasks conforme a pressão).
 - **Infra completa via CloudFormation:** ECR, SQS, ECS Fargate, ALB e CloudWatch.
 
 ## Arquitetura
@@ -32,31 +31,22 @@ graph LR
     Billing --> Logs2[CloudWatch Logs]
 ```
 
-Auto Scaling de cada serviço (políticas independentes, cada uma reagindo ao sinal mais adequado):
+Auto Scaling do ingestor (Step Scaling em CPU, Min 2 / Max 6):
 
 ```mermaid
-graph TB
-    subgraph Ingestor["Ingestor — Step Scaling em CPU"]
-        I1[Alarm CPU > 25% / 60s] --> I2[Scale-out +1 / +2 tasks]
-        I3[Alarm CPU < 10% / 2 min] --> I4[Scale-in -1 task]
-        I5[Min 2 / Max 6]
-    end
-    subgraph Billing["Billing — Step Scaling em queue-depth"]
-        B1[Alarm ApproximateNumberOfMessagesVisible > 10 / 60s] --> B2[Scale-out +1 / +2 tasks]
-        B3[Alarm messages &lt; 5 / 2 min] --> B4[Scale-in -1 task]
-        B5[Min 1 / Max 5]
-    end
+graph LR
+    Alarm1[Alarm CPU > 25% / 60s] --> Out[Scale-out +1 / +2 tasks]
+    Alarm2[Alarm CPU < 10% / 2 min] --> In[Scale-in -1 task]
 ```
 
 ## Pré-requisitos
 
-- **AWS CLI v2** autenticado na conta destino.
-- **Docker Desktop** em execução — necessário para o build/push da imagem ao ECR e para rodar o k6 em container.
-- **Java 25** (o Maven Wrapper já está no repositório).
-- **GitBash** no Windows (todos os scripts são Bash).
-- Região padrão: `us-east-1`.
+- **AWS CLI v2** autenticado, região padrão `us-east-1`.
+- **Docker Desktop** rodando (para build/push da imagem ao ECR e para o k6 em container).
+- **Java 25** + Maven Wrapper (já no repositório).
+- **GitBash** no Windows (alguns comandos usam `MSYS_NO_PATHCONV=1` para evitar conversão de paths Unix como `/ecs/...`).
 
-## Deploy completo
+## 🚀 Deploy Completo
 
 Um único comando orquestra ECR, build e push das imagens, SQS e ECS:
 
@@ -64,7 +54,7 @@ Um único comando orquestra ECR, build e push das imagens, SQS e ECS:
 ./scripts/deploy.sh
 ```
 
-Tempo médio: cerca de 8 minutos. Trecho final da saída:
+Tempo médio: 8 a 12 minutos (dependendo da rede e região). Trecho final da saída:
 
 ```
 ============================================================
@@ -77,7 +67,7 @@ Deploy concluido!
 
 Para rodar cada etapa manualmente e entender cada comando, siga o guia em [DEMO.md](DEMO.md).
 
-## Smoke test
+## ✅ Smoke Test
 
 ```bash
 ./scripts/smoke-test.sh
@@ -95,7 +85,7 @@ Envia um pagamento com correlation-id único, aguarda a fila zerar e procura o m
 ==> Smoke-test concluido.
 ```
 
-## Teste de carga
+## 📊 Teste de Carga
 
 ```bash
 ./scripts/run_k6.sh
@@ -111,17 +101,17 @@ Dispara o k6 em container com stages `0 → 80 → 150 → 200 → 0` VUs em cer
   http_req_duration..: p(95)=4.03s
 ```
 
-Para acompanhar o Auto Scaling em paralelo:
+Para acompanhar o Auto Scaling do ingestor em paralelo:
 
 ```bash
-aws ecs describe-services --cluster sqs-poc-cluster --services sqs-poc-billing \
+aws ecs describe-services --cluster sqs-poc-cluster --services sqs-poc-ingestor \
   --query "services[0].{Desired:desiredCount,Running:runningCount}"
 
 aws sqs get-queue-attributes --queue-url <URL_DA_FILA> \
   --attribute-names ApproximateNumberOfMessages
 ```
 
-## Exemplos cURL
+## 🔍 Exemplos cURL
 
 Webhook com correlation-id explícito (útil para rastrear uma transação específica nos logs):
 
@@ -140,18 +130,18 @@ curl -X POST $ALB_URL/api/payments/webhook \
   -d '{"paymentId":"pay_002","amount":500.00,"currency":"USD","status":"succeeded","createdAt":"2026-04-20T10:00:00Z"}'
 ```
 
-## Onde focar
+## 📁 Onde Focar
 
 Arquivos-chave caso você queira mergulhar no código:
 
 - [`infra/3-ecs.yml`](infra/3-ecs.yml): VPC, ALB, 2 Services Fargate, IAM Roles separadas, Step Scaling com alarmes.
 - [`ms-payment-ingestor/.../filter/CorrelationIdFilter.java`](ms-payment-ingestor/src/main/java/com/devsuperior/ingestor/filter/CorrelationIdFilter.java): geração e propagação do correlation-id.
 - [`ms-payment-ingestor/.../service/PaymentQueueService.java`](ms-payment-ingestor/src/main/java/com/devsuperior/ingestor/service/PaymentQueueService.java): envio ao SQS com Message Attributes.
-- [`ms-billing/src/main/resources/application.properties`](ms-billing/src/main/resources/application.properties): tuning do listener SQS via auto-config (ver também [TUNNING-SQS.md](TUNNING-SQS.md)).
+- [`ms-billing/src/main/resources/application.properties`](ms-billing/src/main/resources/application.properties): tuning do listener SQS via auto-config.
 - [`ms-billing/.../listener/BillingQueueListener.java`](ms-billing/src/main/java/com/devsuperior/billing/listener/BillingQueueListener.java): `@Header` lendo Message Attributes e populando o MDC.
 - [`scripts/deploy.sh`](scripts/deploy.sh): orquestração completa do provisionamento.
 
-## Cleanup
+## 🧹 Cleanup
 
 ```bash
 ./scripts/cleanup.sh

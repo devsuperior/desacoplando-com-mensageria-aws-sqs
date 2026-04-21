@@ -1,15 +1,15 @@
 # Tuning do Consumo SQS
 
-Guia dedicado ao comportamento do consumidor SQS neste projeto: quais propriedades o Spring Cloud AWS expõe, como elas afetam a interação com a API do SQS e quando cada opção faz sentido. Use como referência ao ajustar o `ms-billing` ou ao portar a solução para outros casos de uso.
+Guia dedicado ao comportamento do consumidor SQS neste projeto: propriedades que o Spring Cloud AWS expõe, como elas afetam a interação com a API do SQS e quando cada opção faz sentido. Use como referência ao ajustar o `ms-billing` ou portar a solução para outros casos de uso.
 
 ## Sumário
 
 - [Propriedades e defaults](#propriedades-e-defaults)
 - [Long polling vs short polling](#long-polling-vs-short-polling)
-- [Consumo em batch (`max-messages-per-poll`)](#consumo-em-batch-max-messages-per-poll)
-- [Concorrência (`max-concurrent-messages`)](#concorrência-max-concurrent-messages)
+- [Consumo em batch](#consumo-em-batch-max-messages-per-poll)
+- [Concorrência](#concorrência-max-concurrent-messages)
 - [Acknowledgement modes](#acknowledgement-modes)
-- [Listener mode: `SINGLE_MESSAGE` vs `BATCH`](#listener-mode-single_message-vs-batch)
+- [Listener mode](#listener-mode-single_message-vs-batch)
 
 ---
 
@@ -32,7 +32,10 @@ Sem property global (ficam em `@SqsListener` ou bean customizado):
 
 ## Long polling vs short polling
 
-`poll-timeout` vira `WaitTimeSeconds` na chamada `ReceiveMessage`. Com long polling, o SQS segura a conexão aberta esperando mensagens surgirem, em vez de responder vazio na hora.
+O `poll-timeout` do listener vira o `WaitTimeSeconds` na chamada `ReceiveMessage`. É ele que define o modo:
+
+- **Long polling** (qualquer valor > 0, idealmente 20s): o SQS segura a conexão aberta esperando mensagens. Se uma chega em 3s, a resposta volta em 3s. Se nada chega, volta vazia só depois de 20s. Resultado: menos chamadas, menos custo, menos ruído.
+- **Short polling** (0s): o SQS responde imediatamente, mesmo que vazio. O listener cria um loop de chamadas vazias. A AWS cobra `ReceiveMessage` vazios, então é gasto à toa quando a fila está ociosa.
 
 ```mermaid
 sequenceDiagram
@@ -52,28 +55,20 @@ sequenceDiagram
     Q-->>L: vazia imediata
 ```
 
-### Experimento: alternar em runtime
+**Use long polling, sempre.** Zero desvantagem, a AWS recomenda, economiza. Short polling só em casos raríssimos (e mesmo lá existem melhores opções).
 
-Registre uma nova task definition trocando `SQS_WAIT_TIME_SECONDS` de `20` para `0`:
+### Teste prático: flip polling em runtime
+
+O script [`scripts/flip-polling.sh`](scripts/flip-polling.sh) registra uma nova task definition revision do billing com `SQS_WAIT_TIME_SECONDS` ajustado e força o rolling deployment.
 
 ```bash
-aws ecs describe-task-definition --task-definition sqs-poc-billing \
-  --query "taskDefinition" > /tmp/billing-td.json
+# Muda para short polling (0s)
+./scripts/flip-polling.sh short
 
-# Edite /tmp/billing-td.json trocando SQS_WAIT_TIME_SECONDS de "20" para "0",
-# ou use jq:
-#   jq '(.containerDefinitions[0].environment[] | select(.name == "SQS_WAIT_TIME_SECONDS") | .value) = "0"' \
-#     /tmp/billing-td.json > /tmp/billing-td-short.json
-
-NEW_TD=$(MSYS_NO_PATHCONV=1 aws ecs register-task-definition \
-  --cli-input-json file:///tmp/billing-td.json \
-  --query "taskDefinition.taskDefinitionArn" --output text)
-
-aws ecs update-service --cluster sqs-poc-cluster --service sqs-poc-billing \
-  --task-definition "$NEW_TD" --force-new-deployment
+# Aguarde ~3 min para o rolling deployment terminar
 ```
 
-Após o rolling terminar (cerca de 3 minutos), compare a métrica `NumberOfEmptyReceives`:
+Depois do rolling, compare a métrica `NumberOfEmptyReceives` (soma por minuto, fila vazia):
 
 ```bash
 aws cloudwatch get-metric-statistics \
@@ -88,7 +83,7 @@ aws cloudwatch get-metric-statistics \
   --output table
 ```
 
-**Saída capturada** (4-5 tasks do billing em cada modo, fila vazia):
+**Saída capturada** (billing com ~4 tasks rodando e fila vazia):
 
 ```
 +----------------+-----------------------------+
@@ -104,13 +99,19 @@ aws cloudwatch get-metric-statistics \
 +----------------+-----------------------------+
 ```
 
-Long polling fica na faixa de 0-3 por minuto. Em short polling, salta para **1058/min** — cerca de 100× mais chamadas à API, sem benefício algum enquanto a fila está ociosa. Volte para long polling repetindo o procedimento com `SQS_WAIT_TIME_SECONDS=20`.
+Long polling fica na faixa de 0-3 por minuto. Em short polling, salta para **1058/min** — cerca de 100× mais chamadas à API, sem benefício algum quando a fila está ociosa.
+
+Volte para long polling antes de seguir:
+
+```bash
+./scripts/flip-polling.sh long
+```
 
 ---
 
 ## Consumo em batch (`max-messages-per-poll`)
 
-Não muda o handler — ele continua recebendo uma mensagem por invocação. O que muda é quantas mensagens chegam ao container em uma única chamada `ReceiveMessage`.
+Não muda o handler — continua recebendo uma mensagem por invocação. O que muda é quantas mensagens chegam ao container em uma única chamada `ReceiveMessage`.
 
 ```mermaid
 sequenceDiagram
@@ -133,12 +134,12 @@ Efeito prático: na seção de resiliência do [DEMO.md](DEMO.md), os 3 pagament
 
 ## Concorrência (`max-concurrent-messages`)
 
-Teto de mensagens em voo por fila. A relação com `max-messages-per-poll` é direta:
+Teto de mensagens em voo por fila. Relação direta com `max-messages-per-poll`:
 
 - `max-concurrent-messages=100` + `max-messages-per-poll=10` → até 10 polls paralelas (100 ÷ 10), 100 em voo
 - `max-concurrent-messages=10` + `max-messages-per-poll=10` → 1 poll por vez, 10 em voo
 
-Dimensione pelo handler: I/O-bound (como o nosso, que chama Frankfurter) aceita valores maiores; CPU-bound deve ficar próximo ao número de vCPUs da task.
+Dimensione pelo handler: I/O-bound (como o nosso, que chama Frankfurter) aceita valores maiores. CPU-bound deve ficar próximo ao número de vCPUs da task.
 
 ---
 
@@ -191,7 +192,7 @@ flowchart LR
     end
 ```
 
-O nosso handler é single-message e cada pagamento é independente — batch só faria sentido em cenário de bulk insert ou agregação atômica. Para ativar batch, basta mudar a assinatura:
+O nosso handler é single-message e cada pagamento é independente. Batch só faria sentido em cenário de bulk insert ou agregação atômica. Para ativar batch, basta mudar a assinatura:
 
 ```java
 @SqsListener("${app.queue.billing}")

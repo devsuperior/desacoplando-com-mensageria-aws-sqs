@@ -2,15 +2,17 @@
 
 ## 1. Introdução
 
-Esta demo valida o projeto completo em **AWS real**: dois microsserviços Spring Boot (ingestor e billing) conversando via SQS Standard, orquestrados pelo ECS Fargate atrás de um Application Load Balancer, com IAM granular por serviço, consumo em batch, polling configurável, correlation-id rastreável de ponta a ponta e Auto Scaling Step Scaling reagindo a CPU (ingestor) e queue-depth (billing).
+Esta demo valida o projeto completo em **AWS real**. Dois microsserviços Spring Boot (ingestor e billing) conversam via SQS Standard, orquestrados pelo ECS Fargate atrás de um Application Load Balancer.
+
+Inclui IAM granular por serviço, consumo em batch, polling configurável, correlation-id rastreável de ponta a ponta e Step Scaling do ingestor reagindo à CPU.
 
 **O que vamos fazer:**
 
 - Provisionar a infraestrutura completa via CloudFormation (ECR, SQS, ECS Fargate + ALB).
 - Inspecionar a fila no console AWS e pelo CLI.
-- Verificar que o correlation-id viaja do HTTP até o log, passando pelo SQS como Message Attribute nativo.
+- Verificar que o correlation-id viaja do HTTP até o log, passando pelo SQS como Message Attribute.
 - Derrubar o billing de propósito e confirmar que nenhuma mensagem se perde.
-- Disparar carga com Grafana k6 e acompanhar o Step Scaling subir as tasks.
+- Disparar carga com Grafana k6 e acompanhar o Step Scaling do ingestor subir as tasks.
 - Comparar short polling e long polling pela métrica `NumberOfEmptyReceives`.
 
 **Ambiente:**
@@ -25,17 +27,15 @@ Esta demo valida o projeto completo em **AWS real**: dois microsserviços Spring
 
 ## 2. Provisionamento da Infraestrutura
 
-O provisionamento usa **CloudFormation** em três stacks (ECR, SQS e ECS), conforme o padrão declarativo e reproduzível. Entre a stack de ECR e a de ECS fazemos o build e o push das imagens Docker para o repositório recém-criado.
-
 ### 2.1 Autenticar a AWS CLI
 
-Antes de qualquer coisa, obtenha credenciais temporárias e confirme que está na região correta:
+Obtenha credenciais temporárias e confirme que está na região correta:
 
 ```bash
 aws login
 ```
 
-*Se for solicitada uma região, digite `us-east-1`.*
+*Se solicitada uma região, digite `us-east-1`.*
 
 Verifique o acesso:
 
@@ -47,7 +47,7 @@ Se a tabela com a região aparecer, o CLI está autenticado.
 
 ### 2.2 Criar Repositório ECR
 
-O **Amazon ECR** (Elastic Container Registry) armazena as imagens Docker da aplicação. Precisa ser criado primeiro porque o ECS depende das imagens para iniciar as tasks.
+O **Amazon ECR** armazena as imagens Docker da aplicação. É o primeiro a subir porque o ECS depende das imagens para iniciar as tasks.
 
 📁 [`infra/1-ecr.yml`](infra/1-ecr.yml)
 
@@ -60,7 +60,7 @@ aws cloudformation wait stack-create-complete \
   --stack-name sqs-poc-ecr
 ```
 
-Exportar os outputs da stack em variáveis locais:
+Exporte os outputs da stack em variáveis locais:
 
 ```bash
 OUTPUTS_ECR=$(aws cloudformation describe-stacks --stack-name sqs-poc-ecr \
@@ -85,7 +85,7 @@ Billing repo:  ****************.dkr.ecr.us-east-1.amazonaws.com/sqs-poc-billing
 
 ### 2.3 Build e Push das Imagens Docker
 
-Com os repositórios criados, fazemos o build dos dois microsserviços com o Maven Wrapper, empacotamos via Docker e publicamos no ECR. O login via `aws ecr get-login-password` gera um token temporário para o Docker autenticar.
+O login via `aws ecr get-login-password` gera um token temporário para o Docker autenticar no ECR.
 
 ```bash
 aws ecr get-login-password --region us-east-1 | \
@@ -106,7 +106,7 @@ docker push ${BILLING_REPO_URI}:latest
 
 ### 2.4 Criar a Fila SQS
 
-A fila Standard é criada em uma stack separada, para ficar isolada do ciclo de vida do ECS. Isso permite manter a fila entre releases do backend.
+A fila Standard fica em stack separada para manter o ciclo de vida da mensageria independente do backend. No template você ajusta atributos de negócio: `VisibilityTimeout` (60s aqui), `MessageRetentionPeriod` (4 dias), `ReceiveMessageWaitTimeSeconds` para long polling (20s), `DelaySeconds` e `RedrivePolicy` para DLQ.
 
 📁 [`infra/2-sqs.yml`](infra/2-sqs.yml)
 
@@ -128,7 +128,9 @@ export QUEUE_URL=$(echo "$OUTPUTS_SQS"  | awk '$1 == "BillingQueueUrl" {print $2
 
 ### 2.5 Criar a Infraestrutura ECS
 
-Esta stack cria o cluster ECS, VPC, subnets Multi-AZ, ALB, Security Groups, IAM Roles separadas por serviço (uma com permissão exclusiva de `SendMessage` e outra com `ReceiveMessage`/`DeleteMessage`), Task Definitions Fargate e as políticas de Step Scaling com alarmes. A flag `CAPABILITY_NAMED_IAM` é obrigatória porque criamos roles com nomes fixos para facilitar auditoria. Para entender cada componente em detalhe, o artigo [Deploy de aplicações na AWS com ECS Fargate](https://devsuperior.com.br/blog/deploy-de-aplicacoes-na-aws-com-ecs-fargate) cobre o padrão que seguimos aqui.
+Esta stack cria o cluster ECS, VPC, subnets Multi-AZ, ALB, Security Groups, IAM Roles separadas por serviço e a política de Step Scaling do ingestor com alarmes CloudWatch.
+
+A flag `CAPABILITY_NAMED_IAM` é obrigatória: criamos roles com nomes fixos para facilitar auditoria. Para entender cada componente em detalhe, o artigo [Deploy de aplicações na AWS com ECS Fargate](https://devsuperior.com.br/blog/deploy-de-aplicacoes-na-aws-com-ecs-fargate) cobre o padrão que seguimos aqui.
 
 📁 [`infra/3-ecs.yml`](infra/3-ecs.yml) — principais recursos:
 
@@ -141,11 +143,10 @@ PublicSubnetB:
 IngestorTaskRole:    # sqs:SendMessage + sqs:GetQueueUrl
 BillingTaskRole:     # sqs:ReceiveMessage + sqs:DeleteMessage + sqs:GetQueueAttributes
 
-# Auto Scaling
+# Auto Scaling do ingestor
 IngestorScalableTarget:      # Min 2, Max 6
-BillingScalableTarget:       # Min 1, Max 5
 IngestorStepScaleOutPolicy:  # CPU > 25% → +1 / +2 tasks
-BillingStepScaleOutPolicy:   # ApproximateNumberOfMessagesVisible > 10 → +1 / +2 tasks
+IngestorStepScaleInPolicy:   # CPU < 10% → -1 task
 ```
 
 ```bash
@@ -215,14 +216,14 @@ curl -s $ALB_URL/actuator/health
 
 ## 3. Overview do SQS no Console AWS
 
-Abra **Console AWS > SQS > Filas > sqs-poc-billing-queue**. As métricas principais que queremos acompanhar:
+Abra **Console AWS > SQS > Filas > sqs-poc-billing-queue**. As métricas principais:
 
 - **Messages available** (`ApproximateNumberOfMessagesVisible`): prontas para serem consumidas.
-- **Messages in flight** (`ApproximateNumberOfMessagesNotVisible`): entregues a um consumidor e dentro do Visibility Timeout (60s neste projeto).
-- **Default visibility timeout:** 60s — bate com o que declaramos em `infra/2-sqs.yml`.
-- **Receive message wait time:** 20s — long polling ativo por padrão na fila.
+- **Messages in flight** (`ApproximateNumberOfMessagesNotVisible`): entregues a um consumidor, dentro do Visibility Timeout (60s).
+- **Default visibility timeout:** 60s (conforme `infra/2-sqs.yml`).
+- **Receive message wait time:** 20s (long polling ativo).
 
-Um peek sem consumir a mensagem (clássico para debug):
+Peek sem consumir (debug clássico):
 
 ```bash
 aws sqs receive-message --queue-url $QUEUE_URL \
@@ -231,7 +232,7 @@ aws sqs receive-message --queue-url $QUEUE_URL \
   --message-attribute-names All
 ```
 
-O `--visibility-timeout 0` devolve a mensagem para a fila imediatamente, então dá para inspecionar sem afetar o consumidor.
+O `--visibility-timeout 0` devolve a mensagem imediatamente, permitindo inspecionar sem afetar o consumidor.
 
 Atributos completos da fila via CLI:
 
@@ -256,7 +257,7 @@ aws sqs get-queue-attributes --queue-url $QUEUE_URL --attribute-names All \
 
 ## 4. Headers SQS: Correlation-ID de Ponta a Ponta
 
-O filter `CorrelationIdFilter` gera ou propaga o header `X-Correlation-ID` em toda requisição HTTP. O `PaymentQueueService` envia esse valor como SQS Message Attribute nativo, junto de `X-Source`. O listener do billing recebe os dois via `@Header` e os joga no MDC do logback, deixando cada linha de log rastreável.
+O filter `CorrelationIdFilter` gera ou propaga o header `X-Correlation-ID` em toda requisição HTTP. O `PaymentQueueService` envia esse valor como SQS Message Attribute nativo, junto de `X-Source`. O listener do billing recebe os dois via `@Header` e os joga no MDC do logback, deixando cada linha rastreável.
 
 Envie um pagamento com correlation-id explícito:
 
@@ -304,20 +305,20 @@ fields @timestamp, @message
 | limit 50
 ```
 
-**Saída esperada** (note o padrão `[cid=... src=...]` do `logback-spring.xml`):
+**Saída esperada** (padrão `[cid=... src=...]` do `logback-spring.xml`):
 
 ```
 23:42:41 INFO [sqsListenerEndpointContainer#0-1] [cid=demo-headers-001 src=ms-payment-ingestor] BillingQueueListener - Pagamento recebido da fila: pay_headers_01
 23:42:50 INFO [sqsListenerEndpointContainer#0-1] [cid=demo-headers-001 src=ms-payment-ingestor] BillingProcessorService - Fatura persistida para pagamento pay_headers_01 — líquido: 57.98 USD
 ```
 
-O mesmo correlation-id aparece do controller até a linha de persistência, cobrindo rastreabilidade ponta a ponta sem nenhuma tabela de correlação extra.
+O mesmo correlation-id aparece do controller até a persistência. Rastreabilidade ponta a ponta, sem tabela de correlação extra.
 
 ---
 
 ## 5. Resiliência: Parar o Billing e Não Perder Pagamentos
 
-A principal promessa do desacoplamento é: se o consumidor cair, o produtor continua aceitando requisições e a fila segura tudo até o consumidor voltar. Vamos validar isso na prática.
+A principal promessa do desacoplamento: se o consumidor cair, o produtor continua aceitando requisições e a fila segura tudo até o consumidor voltar. Vamos validar isso na prática.
 
 ### 5.1 Derruba o billing
 
@@ -357,9 +358,10 @@ for i in 01 02 03; do
 done
 ```
 
-Cada um responde `202 Accepted` de imediato. Verifique que a fila acumulou as mensagens:
+Cada um responde `202 Accepted` imediatamente. Aguarde ~10 segundos para a métrica do SQS consolidar (são *approximate*) e verifique a fila:
 
 ```bash
+sleep 10
 aws sqs get-queue-attributes --queue-url $QUEUE_URL \
   --attribute-names ApproximateNumberOfMessages ApproximateNumberOfMessagesNotVisible \
   --query "Attributes" --output table
@@ -392,7 +394,7 @@ aws logs tail /ecs/sqs-poc-billing --since 10m --follow
 
 Os três correlation-ids aparecem nos logs, processados em paralelo por threads `sqsListenerEndpointContainer#0-1`, `#0-2`, `#0-3`. Essa paralelização é o consumo em batch em ação: `maxMessagesPerPoll=10` puxa até dez mensagens por `ReceiveMessage` e o container as processa concorrentemente.
 
-Nenhum pagamento se perdeu. O SQS segurou as três mensagens dentro do `MessageRetentionPeriod` (4 dias na nossa configuração) e o billing consumiu tudo quando voltou.
+Nenhum pagamento se perdeu. O SQS segurou as três mensagens dentro do `MessageRetentionPeriod` (4 dias) e o billing consumiu tudo quando voltou.
 
 ---
 
@@ -404,22 +406,22 @@ Dispare o script (stages `0 → 80 → 150 → 200 → 0` VUs em cerca de 3m30s)
 ./scripts/run_k6.sh
 ```
 
-Em terminais paralelos, observe o Step Scaling reagir:
+Em terminais paralelos, observe o Step Scaling do ingestor reagir:
 
 ```bash
-# Task count dos dois services
+# Task count do ingestor
 watch -n 5 'aws ecs describe-services --cluster sqs-poc-cluster \
-  --services sqs-poc-ingestor sqs-poc-billing \
-  --query "services[*].{Name:serviceName,Desired:desiredCount,Running:runningCount}" \
+  --services sqs-poc-ingestor \
+  --query "services[0].{Desired:desiredCount,Running:runningCount}" \
   --output table'
 
-# Fila enchendo em tempo real
+# Fila enchendo e drenando em tempo real
 watch -n 5 'aws sqs get-queue-attributes --queue-url '"$QUEUE_URL"' \
   --attribute-names ApproximateNumberOfMessages --output text'
 
-# Estado dos alarmes
+# Estado do alarme
 aws cloudwatch describe-alarms \
-  --alarm-names sqs-poc-ingestor-high-cpu sqs-poc-billing-high-queue \
+  --alarm-names sqs-poc-ingestor-high-cpu \
   --query "MetricAlarms[].{Name:AlarmName,State:StateValue,Threshold:Threshold}" \
   --output table
 ```
@@ -435,23 +437,14 @@ aws cloudwatch describe-alarms \
   http_req_duration..: p(95)=4.03s
 ```
 
-E o scaling registrado em paralelo:
-
-```
-billing=3/3 ingestor=4/3 fila=0   alarms[billingH=ALARM ingestorH=ALARM]
-billing=4/2 ingestor=4/3 fila=675 alarms[billingH=ALARM ingestorH=ALARM]
-```
-
-- O **ingestor** escalou de 2 para 4 tasks respondendo ao alarme `sqs-poc-ingestor-high-cpu` (CPU > 25% por 60s).
-- O **billing** escalou de 1 para 4 tasks respondendo ao alarme `sqs-poc-billing-high-queue` (`ApproximateNumberOfMessagesVisible` > 10 por 60s).
-- Zero pagamento perdido mesmo com p95 de 4s no pico.
+O ingestor escalou de 2 para 4 tasks durante o pico respondendo ao alarme `sqs-poc-ingestor-high-cpu` (CPU > 25% por 60s). Zero pagamento perdido mesmo com p95 de 4s.
 
 Para listar as atividades de scaling registradas:
 
 ```bash
 aws application-autoscaling describe-scaling-activities \
   --service-namespace ecs \
-  --resource-id service/sqs-poc-cluster/sqs-poc-billing \
+  --resource-id service/sqs-poc-cluster/sqs-poc-ingestor \
   --max-items 5 \
   --query "ScalingActivities[].{Time:StartTime,Desc:Description,Cause:Cause,Status:StatusCode}" \
   --output table
@@ -461,7 +454,7 @@ aws application-autoscaling describe-scaling-activities \
 
 ## 7. Tuning do Consumo SQS
 
-Propriedades de `max-messages-per-poll`, `poll-timeout`, `max-concurrent-messages`, acknowledgement modes, listener modes e o experimento de short vs long polling estão em [TUNNING-SQS.md](TUNNING-SQS.md).
+Para ir além do default — alternar short vs long polling em runtime, ajustar batch size, escolher acknowledgement modes e explorar single vs batch listener — siga o guia dedicado em [TUNNING-SQS.md](TUNNING-SQS.md). Ele tem os diagramas e um experimento prático com métrica `NumberOfEmptyReceives` mostrando ao vivo o custo do short polling.
 
 ---
 
@@ -475,7 +468,7 @@ Tudo de uma vez:
 ./scripts/cleanup.sh
 ```
 
-Ou manualmente. As três stacks são independentes no CloudFormation, então as deletes podem rodar em paralelo. Só lembre de limpar as imagens do ECR antes, porque o CloudFormation se recusa a deletar um repositório que ainda tenha imagens dentro:
+Ou manualmente. As três stacks são independentes no CloudFormation, então as deletes podem rodar em paralelo. Só lembre de limpar as imagens do ECR antes, pois o CloudFormation se recusa a deletar repositório com imagens dentro:
 
 ```bash
 # 1. Limpa imagens do ECR (força delete)
@@ -506,3 +499,27 @@ aws cloudformation list-stacks --stack-status-filter CREATE_COMPLETE UPDATE_COMP
 ```
 
 A saída deve ser vazia. Ambiente zerado.
+
+---
+
+## 9. Resumo da Configuração
+
+Para referência rápida, a configuração efetiva aplicada pelos templates:
+
+| Componente | Parâmetro | Valor |
+|---|---|---|
+| **ECS Ingestor** | CPU / Memory | 256 / 512 |
+| | Desired / Min / Max | 2 / 2 / 6 |
+| | Scale-out | CPU > 25% (1 período de 60s) → `+1` / `+2` tasks |
+| | Scale-in | CPU < 10% (2 períodos de 60s) → `-1` task |
+| **ECS Billing** | CPU / Memory | 512 / 1024 |
+| | Desired | 1 (fixo; sem Auto Scaling neste episódio) |
+| **SQS billing-queue** | VisibilityTimeout | 60s |
+| | MessageRetentionPeriod | 4 dias |
+| | ReceiveMessageWaitTimeSeconds | 20s (long polling) |
+| **Container Insights** | Cluster `sqs-poc-cluster` | `enhanced` |
+| **Log Groups** | Retenção | 7 dias |
+| **Listener SQS (billing)** | max-messages-per-poll | 10 |
+| | poll-timeout | 20s |
+| | max-concurrent-messages | 10 |
+| | acknowledgement-mode | `ON_SUCCESS` |
