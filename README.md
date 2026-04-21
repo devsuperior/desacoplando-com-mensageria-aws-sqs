@@ -9,10 +9,10 @@ Enquanto o artigo sobe tudo localmente com LocalStack, aqui você provisionará 
 
 ## O que muda em relação ao artigo?
 
-- **IAM granular:** ingestor só publica (`sqs:SendMessage`), billing só consome (`sqs:ReceiveMessage`/`DeleteMessage`).
-- **Rastreabilidade ponta a ponta:** Correlation-ID viaja como SQS Message Attribute do webhook HTTP até o log persistido.
-- **Tuning do consumo em runtime:** batch, polling e ack modes ajustáveis sem rebuild (detalhes em [TUNNING-SQS.md](TUNNING-SQS.md)).
-- **Auto Scaling do ingestor por CPU** com Step Scaling (degraus `+1` / `+2` tasks conforme a pressão).
+- **Deploy na AWS:** Vamos utilizar o console AWS e o CLI para interagir com a nossa aplicação e a nossa fila.
+- **Teste de carga:** Como a fila de comporta quando está sobre pressão.
+- **Rastreabilidade ponta a ponta:** Correlation-ID no SQS Message Attribute entre o `ingestor` e o `billing`.
+- **Tuning do consumo:** batch, polling e ack modes ajustáveis (detalhes em [TUNNING-SQS.md](TUNNING-SQS.md)).
 - **Infra completa via CloudFormation:** ECR, SQS, ECS Fargate, ALB e CloudWatch.
 
 ## Arquitetura
