@@ -2,9 +2,9 @@
 
 ## 1. Introdução
 
-Esta demo valida o projeto completo em **AWS real**. Dois microsserviços Spring Boot (ingestor e billing) conversam via SQS Standard, orquestrados pelo ECS Fargate atrás de um Application Load Balancer.
+Esta demo valida o projeto completo em **AWS real**. Dois microsserviços Spring Boot (ingestor e billing) conversam via `SQS Standard`. Os servicõs estão no ECS Fargate atrás de um Application Load Balancer, que fará a exposição do nosso endpoint.
 
-Inclui IAM granular por serviço, consumo em batch, polling configurável, correlation-id rastreável de ponta a ponta e Step Scaling do ingestor reagindo à CPU.
+Dentre os tópicos vamos aboardar o consumo em batch, polling configurável, correlation-id rastreável de ponta a ponta e teste de carga.
 
 **O que vamos fazer:**
 
