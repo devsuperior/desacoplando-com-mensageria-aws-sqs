@@ -55,7 +55,7 @@ sequenceDiagram
     Q-->>L: vazia imediata
 ```
 
-**Use long polling, sempre.** Zero desvantagem, a AWS recomenda, economiza. Short polling só em casos raríssimos (e mesmo lá existem melhores opções).
+**Long polling é o default certo** para quase tudo em produção: menos chamadas, menos custo, menos ruído (e a AWS recomenda). Short polling tem lugar em cenários específicos — por exemplo, testes automatizados onde esperar 20s em fila vazia trava o ciclo de feedback, ou clientes stateless de vida curta que não podem manter conexão HTTP aberta.
 
 ### Teste prático: flip polling em runtime
 
