@@ -31,14 +31,6 @@ graph LR
     Billing --> Logs2[CloudWatch Logs]
 ```
 
-Auto Scaling do ingestor (Step Scaling em CPU, Min 2 / Max 6):
-
-```mermaid
-graph LR
-    Alarm1[Alarm CPU > 25% / 60s] --> Out[Scale-out +1 / +2 tasks]
-    Alarm2[Alarm CPU < 10% / 2 min] --> In[Scale-in -1 task]
-```
-
 ## Pré-requisitos
 
 - **AWS CLI v2** autenticado, região padrão `us-east-1`.
