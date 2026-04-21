@@ -55,7 +55,10 @@ sequenceDiagram
     Q-->>L: vazia imediata
 ```
 
-**Long polling é o default certo** para quase tudo em produção: menos chamadas, menos custo, menos ruído (e a AWS recomenda). Short polling tem lugar em cenários específicos — por exemplo, testes automatizados onde esperar 20s em fila vazia trava o ciclo de feedback, ou clientes stateless de vida curta que não podem manter conexão HTTP aberta.
+**Long polling é o default certo** para quase tudo em produção: menos chamadas, menos custo, menos ruído (e a AWS recomenda). Short polling tem lugar em cenários específicos, como:
+
+- **Testes automatizados** onde esperar 20s por uma fila vazia trava o ciclo de feedback.
+- **Funções serverless cobradas por tempo de execução** (AWS Lambda agendada, job de CI, script de cron que roda e sai) — nesses casos o consumidor existe por poucos segundos e não compensa pagar por 20s só esperando.
 
 ### Teste prático: flip polling em runtime
 
@@ -100,6 +103,17 @@ aws cloudwatch get-metric-statistics \
 ```
 
 Long polling fica na faixa de 0-3 por minuto. Em short polling, salta para **1058/min** — cerca de 100× mais chamadas à API, sem benefício algum quando a fila está ociosa.
+
+### Tradução em custo
+
+Os números do experimento traduzidos para o preço público do SQS Standard ($0,40 por milhão de requests), considerando a fila ociosa 24/7:
+
+| Modo | Empty receives/min (medido) | Requests/mês estimados | Custo mensal (só `ReceiveMessage`) |
+|---|---:|---:|---:|
+| Long polling (20s) | ~3 | ~130 mil | grátis (cabe no free tier de 1M requests/mês) |
+| Short polling (0s) | ~1.058 | ~45 milhões | ~US$ 18 por fila |
+
+É o custo só das chamadas à API, por uma fila vazia. Numa fila com tráfego constante a diferença diminui (os polls voltam com mensagem), mas o padrão se mantém: short polling só se paga em cenários onde você realmente precisa dele.
 
 Volte para long polling antes de seguir:
 
