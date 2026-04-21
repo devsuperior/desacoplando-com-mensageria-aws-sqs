@@ -1,0 +1,68 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: ECR Repositories for desacoplando-com-mensageria-aws-sqs (ms-payment-ingestor + ms-billing)
+
+Resources:
+  IngestorRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: sqs-poc-ingestor
+      ImageTagMutability: MUTABLE
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [
+              {
+                "rulePriority": 1,
+                "description": "Expire untagged images after 1 day",
+                "selection": { "tagStatus": "untagged", "countType": "sinceImagePushed", "countUnit": "days", "countNumber": 1 },
+                "action": { "type": "expire" }
+              },
+              {
+                "rulePriority": 2,
+                "description": "Keep last 5 tagged images",
+                "selection": { "tagStatus": "any", "countType": "imageCountMoreThan", "countNumber": 5 },
+                "action": { "type": "expire" }
+              }
+            ]
+          }
+
+  BillingRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: sqs-poc-billing
+      ImageTagMutability: MUTABLE
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [
+              {
+                "rulePriority": 1,
+                "description": "Expire untagged images after 1 day",
+                "selection": { "tagStatus": "untagged", "countType": "sinceImagePushed", "countUnit": "days", "countNumber": 1 },
+                "action": { "type": "expire" }
+              },
+              {
+                "rulePriority": 2,
+                "description": "Keep last 5 tagged images",
+                "selection": { "tagStatus": "any", "countType": "imageCountMoreThan", "countNumber": 5 },
+                "action": { "type": "expire" }
+              }
+            ]
+          }
+
+Outputs:
+  AccountId:
+    Description: AWS Account ID
+    Value: !Ref AWS::AccountId
+  IngestorRepositoryName:
+    Description: Nome do repositorio ECR do ingestor
+    Value: !Ref IngestorRepository
+  IngestorRepositoryUri:
+    Description: URI do repositorio ECR do ingestor
+    Value: !GetAtt IngestorRepository.RepositoryUri
+  BillingRepositoryName:
+    Description: Nome do repositorio ECR do billing
+    Value: !Ref BillingRepository
+  BillingRepositoryUri:
+    Description: URI do repositorio ECR do billing
+    Value: !GetAtt BillingRepository.RepositoryUri

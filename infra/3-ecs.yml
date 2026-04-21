@@ -1,0 +1,537 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: ECS Fargate para desacoplando-com-mensageria-aws-sqs (ingestor com ALB + billing consumidor) com IAM granular e Auto Scaling dual (CPU + queue-depth)
+
+Parameters:
+  IngestorImageUri:
+    Type: String
+    Description: "URI completa da imagem do ms-payment-ingestor (ex: ACCOUNT.dkr.ecr.us-east-1.amazonaws.com/sqs-poc-ingestor:latest)"
+  BillingImageUri:
+    Type: String
+    Description: URI completa da imagem do ms-billing
+  BillingQueueName:
+    Type: String
+    Description: Nome da billing-queue (output da stack sqs-poc-sqs)
+  BillingQueueArn:
+    Type: String
+    Description: ARN da billing-queue
+  BillingQueueUrl:
+    Type: String
+    Description: URL da billing-queue
+
+Resources:
+  # === VPC e Networking ===
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: sqs-poc-vpc
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: sqs-poc-igw
+
+  VpcGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref Vpc
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      AvailabilityZone: us-east-1a
+      CidrBlock: 10.0.1.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: sqs-poc-subnet-a
+
+  PublicSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      AvailabilityZone: us-east-1b
+      CidrBlock: 10.0.2.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: sqs-poc-subnet-b
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Name
+          Value: sqs-poc-public-rt
+
+  DefaultPublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: VpcGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  SubnetARouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetA
+      RouteTableId: !Ref PublicRouteTable
+
+  SubnetBRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetB
+      RouteTableId: !Ref PublicRouteTable
+
+  # === Security Groups ===
+  AlbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: sqs-poc-alb-sg
+      GroupDescription: Permite HTTP publico para o ALB do ingestor
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+
+  IngestorTaskSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: sqs-poc-ingestor-sg
+      GroupDescription: Tasks do ingestor aceitam 8081 apenas do ALB
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 8081
+          ToPort: 8081
+          SourceSecurityGroupId: !Ref AlbSecurityGroup
+
+  BillingTaskSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: sqs-poc-billing-sg
+      GroupDescription: Tasks do billing; somente egress (SQS e Frankfurter API)
+      VpcId: !Ref Vpc
+
+  # === Application Load Balancer (apenas para o ingestor) ===
+  IngestorAlb:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: sqs-poc-alb
+      Type: application
+      Scheme: internet-facing
+      SecurityGroups:
+        - !Ref AlbSecurityGroup
+      Subnets:
+        - !Ref PublicSubnetA
+        - !Ref PublicSubnetB
+
+  IngestorTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: sqs-poc-ingestor-tg
+      VpcId: !Ref Vpc
+      Port: 8081
+      Protocol: HTTP
+      TargetType: ip
+      HealthCheckPath: /actuator/health
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      Matcher:
+        HttpCode: '200'
+
+  IngestorListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref IngestorAlb
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref IngestorTargetGroup
+
+  # === CloudWatch Log Groups ===
+  IngestorLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /ecs/sqs-poc-ingestor
+      RetentionInDays: 7
+
+  BillingLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /ecs/sqs-poc-billing
+      RetentionInDays: 7
+
+  # === IAM Roles ===
+  EcsTaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: sqs-poc-ecs-execution-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+
+  IngestorTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: sqs-poc-ingestor-task-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: IngestorSqsWriteOnly
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - sqs:SendMessage
+                  - sqs:GetQueueUrl
+                Resource: !Ref BillingQueueArn
+
+  BillingTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: sqs-poc-billing-task-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: BillingSqsConsume
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - sqs:ReceiveMessage
+                  - sqs:DeleteMessage
+                  - sqs:GetQueueAttributes
+                  - sqs:GetQueueUrl
+                Resource: !Ref BillingQueueArn
+
+  # === ECS Cluster ===
+  EcsCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: sqs-poc-cluster
+      ClusterSettings:
+        - Name: containerInsights
+          Value: enhanced
+
+  # === Task Definitions ===
+  IngestorTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: sqs-poc-ingestor
+      Cpu: '256'
+      Memory: '512'
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      ExecutionRoleArn: !GetAtt EcsTaskExecutionRole.Arn
+      TaskRoleArn: !GetAtt IngestorTaskRole.Arn
+      ContainerDefinitions:
+        - Name: ingestor
+          Image: !Ref IngestorImageUri
+          Essential: true
+          PortMappings:
+            - ContainerPort: 8081
+              Protocol: tcp
+          Environment:
+            - Name: BILLING_QUEUE_NAME
+              Value: !Ref BillingQueueName
+            - Name: AWS_REGION
+              Value: !Ref AWS::Region
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref IngestorLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: ecs
+
+  BillingTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: sqs-poc-billing
+      Cpu: '256'
+      Memory: '512'
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      ExecutionRoleArn: !GetAtt EcsTaskExecutionRole.Arn
+      TaskRoleArn: !GetAtt BillingTaskRole.Arn
+      ContainerDefinitions:
+        - Name: billing
+          Image: !Ref BillingImageUri
+          Essential: true
+          PortMappings:
+            - ContainerPort: 8082
+              Protocol: tcp
+          Environment:
+            - Name: BILLING_QUEUE_NAME
+              Value: !Ref BillingQueueName
+            - Name: AWS_REGION
+              Value: !Ref AWS::Region
+            - Name: SQS_WAIT_TIME_SECONDS
+              Value: '20'
+            - Name: SQS_MAX_MESSAGES_PER_POLL
+              Value: '10'
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref BillingLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: ecs
+
+  # === ECS Services ===
+  IngestorService:
+    Type: AWS::ECS::Service
+    DependsOn: IngestorListener
+    Properties:
+      ServiceName: sqs-poc-ingestor
+      Cluster: !Ref EcsCluster
+      TaskDefinition: !Ref IngestorTaskDefinition
+      DesiredCount: 2
+      LaunchType: FARGATE
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          SecurityGroups:
+            - !Ref IngestorTaskSecurityGroup
+          Subnets:
+            - !Ref PublicSubnetA
+            - !Ref PublicSubnetB
+      LoadBalancers:
+        - ContainerName: ingestor
+          ContainerPort: 8081
+          TargetGroupArn: !Ref IngestorTargetGroup
+
+  BillingService:
+    Type: AWS::ECS::Service
+    Properties:
+      ServiceName: sqs-poc-billing
+      Cluster: !Ref EcsCluster
+      TaskDefinition: !Ref BillingTaskDefinition
+      DesiredCount: 1
+      LaunchType: FARGATE
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          SecurityGroups:
+            - !Ref BillingTaskSecurityGroup
+          Subnets:
+            - !Ref PublicSubnetA
+            - !Ref PublicSubnetB
+
+  # === Auto Scaling do Ingestor (Step Scaling em CPU) ===
+  # Step Scaling reage em ~1 min (1 periodo de 60s) com degraus explicitos.
+  IngestorScalableTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    Properties:
+      MinCapacity: 2
+      MaxCapacity: 6
+      ResourceId: !Sub service/${EcsCluster}/${IngestorService.Name}
+      RoleARN: !Sub arn:aws:iam::${AWS::AccountId}:role/aws-service-role/ecs.application-autoscaling.amazonaws.com/AWSServiceRoleForApplicationAutoScaling_ECSService
+      ScalableDimension: ecs:service:DesiredCount
+      ServiceNamespace: ecs
+
+  IngestorStepScaleOutPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: sqs-poc-ingestor-step-out
+      PolicyType: StepScaling
+      ScalingTargetId: !Ref IngestorScalableTarget
+      StepScalingPolicyConfiguration:
+        AdjustmentType: ChangeInCapacity
+        Cooldown: 30
+        MetricAggregationType: Average
+        StepAdjustments:
+          - MetricIntervalLowerBound: 0
+            MetricIntervalUpperBound: 10
+            ScalingAdjustment: 1
+          - MetricIntervalLowerBound: 10
+            ScalingAdjustment: 2
+
+  IngestorStepScaleInPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: sqs-poc-ingestor-step-in
+      PolicyType: StepScaling
+      ScalingTargetId: !Ref IngestorScalableTarget
+      StepScalingPolicyConfiguration:
+        AdjustmentType: ChangeInCapacity
+        Cooldown: 120
+        MetricAggregationType: Average
+        StepAdjustments:
+          - MetricIntervalUpperBound: 0
+            ScalingAdjustment: -1
+
+  IngestorHighCpuAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: sqs-poc-ingestor-high-cpu
+      MetricName: CPUUtilization
+      Namespace: AWS/ECS
+      Statistic: Average
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 25
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: ClusterName
+          Value: !Ref EcsCluster
+        - Name: ServiceName
+          Value: !GetAtt IngestorService.Name
+      AlarmActions:
+        - !Ref IngestorStepScaleOutPolicy
+
+  IngestorLowCpuAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: sqs-poc-ingestor-low-cpu
+      MetricName: CPUUtilization
+      Namespace: AWS/ECS
+      Statistic: Average
+      Period: 60
+      EvaluationPeriods: 2
+      Threshold: 10
+      ComparisonOperator: LessThanThreshold
+      Dimensions:
+        - Name: ClusterName
+          Value: !Ref EcsCluster
+        - Name: ServiceName
+          Value: !GetAtt IngestorService.Name
+      AlarmActions:
+        - !Ref IngestorStepScaleInPolicy
+
+  # === Auto Scaling do Billing (Step Scaling em queue-depth) ===
+  # Reage quando a fila passa do threshold por 1 periodo (60s).
+  BillingScalableTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    Properties:
+      MinCapacity: 1
+      MaxCapacity: 5
+      ResourceId: !Sub service/${EcsCluster}/${BillingService.Name}
+      RoleARN: !Sub arn:aws:iam::${AWS::AccountId}:role/aws-service-role/ecs.application-autoscaling.amazonaws.com/AWSServiceRoleForApplicationAutoScaling_ECSService
+      ScalableDimension: ecs:service:DesiredCount
+      ServiceNamespace: ecs
+
+  BillingStepScaleOutPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: sqs-poc-billing-step-out
+      PolicyType: StepScaling
+      ScalingTargetId: !Ref BillingScalableTarget
+      StepScalingPolicyConfiguration:
+        AdjustmentType: ChangeInCapacity
+        Cooldown: 30
+        MetricAggregationType: Average
+        StepAdjustments:
+          - MetricIntervalLowerBound: 0
+            MetricIntervalUpperBound: 80
+            ScalingAdjustment: 1
+          - MetricIntervalLowerBound: 80
+            ScalingAdjustment: 2
+
+  BillingStepScaleInPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: sqs-poc-billing-step-in
+      PolicyType: StepScaling
+      ScalingTargetId: !Ref BillingScalableTarget
+      StepScalingPolicyConfiguration:
+        AdjustmentType: ChangeInCapacity
+        Cooldown: 120
+        MetricAggregationType: Average
+        StepAdjustments:
+          - MetricIntervalUpperBound: 0
+            ScalingAdjustment: -1
+
+  BillingHighQueueAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: sqs-poc-billing-high-queue
+      MetricName: ApproximateNumberOfMessagesVisible
+      Namespace: AWS/SQS
+      Statistic: Average
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 10
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: QueueName
+          Value: !Ref BillingQueueName
+      AlarmActions:
+        - !Ref BillingStepScaleOutPolicy
+
+  BillingLowQueueAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: sqs-poc-billing-low-queue
+      MetricName: ApproximateNumberOfMessagesVisible
+      Namespace: AWS/SQS
+      Statistic: Average
+      Period: 60
+      EvaluationPeriods: 2
+      Threshold: 5
+      ComparisonOperator: LessThanThreshold
+      Dimensions:
+        - Name: QueueName
+          Value: !Ref BillingQueueName
+      AlarmActions:
+        - !Ref BillingStepScaleInPolicy
+
+Outputs:
+  LoadBalancerUrl:
+    Description: URL publica do ALB do ingestor
+    Value: !Sub http://${IngestorAlb.DNSName}
+  EcsClusterName:
+    Description: Nome do cluster ECS
+    Value: !Ref EcsCluster
+  IngestorServiceName:
+    Description: Nome do service do ingestor
+    Value: !GetAtt IngestorService.Name
+  BillingServiceName:
+    Description: Nome do service do billing
+    Value: !GetAtt BillingService.Name
+  IngestorTaskDefinitionArn:
+    Description: ARN da task definition do ingestor
+    Value: !Ref IngestorTaskDefinition
+  BillingTaskDefinitionArn:
+    Description: ARN da task definition do billing
+    Value: !Ref BillingTaskDefinition
+  IngestorLogGroupName:
+    Description: Nome do log group do ingestor
+    Value: !Ref IngestorLogGroup
+  BillingLogGroupName:
+    Description: Nome do log group do billing
+    Value: !Ref BillingLogGroup

@@ -1,0 +1,22 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: SQS Queue (billing-queue) para desacoplando-com-mensageria-aws-sqs. DLQ intencionalmente fora do escopo deste episodio.
+
+Resources:
+  BillingQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: sqs-poc-billing-queue
+      VisibilityTimeout: 60
+      MessageRetentionPeriod: 345600
+      ReceiveMessageWaitTimeSeconds: 20
+
+Outputs:
+  BillingQueueName:
+    Description: Nome da fila principal
+    Value: !GetAtt BillingQueue.QueueName
+  BillingQueueArn:
+    Description: ARN da fila principal
+    Value: !GetAtt BillingQueue.Arn
+  BillingQueueUrl:
+    Description: URL da fila principal
+    Value: !Ref BillingQueue
