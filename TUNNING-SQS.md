@@ -110,7 +110,7 @@ Os números do experimento traduzidos para o preço público do SQS Standard ($0
 
 | Modo | Empty receives/min (medido) | Requests/mês estimados | Custo mensal (só `ReceiveMessage`) |
 |---|---:|---:|---:|
-| Long polling (20s) | ~3 | ~130 mil | grátis (cabe no free tier de 1M requests/mês) |
+| Long polling (20s) | ~3 | ~130 mil | ~US$ 0,05 por fila |
 | Short polling (0s) | ~1.058 | ~45 milhões | ~US$ 18 por fila |
 
 É o custo só das chamadas à API, por uma fila vazia. Numa fila com tráfego constante a diferença diminui (os polls voltam com mensagem), mas o padrão se mantém: short polling só se paga em cenários onde você realmente precisa dele.
