@@ -61,7 +61,7 @@ public class BillingProcessorService {
         );
         repository.save(payment);
 
-        log.info("Fatura persistida para pagamento {} — líquido: {} USD",
+        log.info("Fatura persistida para pagamento {}, líquido: {} USD",
                 event.paymentId(), netAmount);
     }
 }

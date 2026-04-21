@@ -1,5 +1,19 @@
 # Demo: Desacoplando com Mensageria no AWS SQS
 
+## Sumário
+
+- [1. Introdução](#1-introdução)
+- [2. Provisionamento da Infraestrutura](#2-provisionamento-da-infraestrutura)
+- [3. Overview do SQS no Console AWS](#3-overview-do-sqs-no-console-aws)
+- [4. Headers SQS: Correlation-ID de ponta a ponta](#4-headers-sqs-correlation-id-de-ponta-a-ponta)
+- [5. Resiliência: parar o billing e não perder pagamentos](#5-resiliência-parar-o-billing-e-não-perder-pagamentos)
+- [6. Teste de carga com k6 e Auto Scaling](#6-teste-de-carga-com-k6-e-auto-scaling)
+- [7. Tuning do consumo SQS](#7-tuning-do-consumo-sqs)
+- [8. Cleanup](#8-cleanup)
+- [9. Resumo da configuração](#9-resumo-da-configuração)
+
+---
+
 ## 1. Introdução
 
 Esta demo valida o projeto completo em **AWS real**. Dois microsserviços Spring Boot (ingestor e billing) conversam via `SQS Standard`. Os servicõs estão no ECS Fargate atrás de um Application Load Balancer, que fará a exposição do nosso endpoint.
@@ -132,7 +146,7 @@ Esta stack cria o cluster ECS, VPC, subnets Multi-AZ, ALB, Security Groups, IAM 
 
 A flag `CAPABILITY_NAMED_IAM` é obrigatória: criamos roles com nomes fixos para facilitar auditoria. Para entender cada componente em detalhe, o artigo [Deploy de aplicações na AWS com ECS Fargate](https://devsuperior.com.br/blog/deploy-de-aplicacoes-na-aws-com-ecs-fargate) cobre o padrão que seguimos aqui.
 
-📁 [`infra/3-ecs.yml`](infra/3-ecs.yml) — principais recursos:
+📁 [`infra/3-ecs.yml`](infra/3-ecs.yml), com os principais recursos abaixo.
 
 ```yaml
 # Multi-AZ: duas subnets públicas em us-east-1a e us-east-1b
@@ -308,7 +322,7 @@ fields @timestamp, @message
 
 ```
 23:42:41 INFO [sqsListenerEndpointContainer#0-1] [cid=demo-headers-001 src=ms-payment-ingestor] BillingQueueListener - Pagamento recebido da fila: pay_headers_01
-23:42:50 INFO [sqsListenerEndpointContainer#0-1] [cid=demo-headers-001 src=ms-payment-ingestor] BillingProcessorService - Fatura persistida para pagamento pay_headers_01 — líquido: 57.98 USD
+23:42:50 INFO [sqsListenerEndpointContainer#0-1] [cid=demo-headers-001 src=ms-payment-ingestor] BillingProcessorService - Fatura persistida para pagamento pay_headers_01, líquido: 57.98 USD
 ```
 
 O mesmo correlation-id aparece do controller até a persistência. Rastreabilidade ponta a ponta, sem tabela de correlação extra.
@@ -453,7 +467,7 @@ aws application-autoscaling describe-scaling-activities \
 
 ## 7. Tuning do Consumo SQS
 
-Para ir além do default — alternar short vs long polling em runtime, ajustar batch size, escolher acknowledgement modes e explorar single vs batch listener — siga o guia dedicado em [TUNNING-SQS.md](TUNNING-SQS.md). Ele tem os diagramas e um experimento prático com métrica `NumberOfEmptyReceives` mostrando ao vivo o custo do short polling.
+Para ir além do default (alternar short vs long polling em runtime, ajustar batch size, escolher acknowledgement modes, explorar single vs batch listener), siga o guia dedicado em [TUNNING-SQS.md](TUNNING-SQS.md). Ele tem os diagramas e um experimento prático com métrica `NumberOfEmptyReceives` mostrando ao vivo o custo do short polling.
 
 ---
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# deploy.sh — orquestra o provisionamento completo do projeto desacoplando-com-mensageria-aws-sqs na AWS.
+# deploy.sh orquestra o provisionamento completo do projeto desacoplando-com-mensageria-aws-sqs na AWS.
 # Etapas: ECR -> build/push -> SQS -> ECS.
 # Pre-requisitos: aws cli v2 logado, docker rodando, Maven Wrapper presente em cada servico.
 

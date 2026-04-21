@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# cleanup.sh — destroi toda a infraestrutura provisionada pelo projeto desacoplando-com-mensageria-aws-sqs.
+# cleanup.sh destroi toda a infraestrutura provisionada pelo projeto desacoplando-com-mensageria-aws-sqs.
 # As 3 stacks (ECS, ECR, SQS) sao independentes no CloudFormation, entao o delete roda em PARALELO.
 # ECR exige limpar imagens antes do delete-stack (CloudFormation recusa repos com imagens).
 

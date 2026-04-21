@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# push-image.sh — build do JAR + build Docker + push para ECR.
+# push-image.sh faz build do JAR, build Docker e push para o ECR.
 # Uso: ./scripts/push-image.sh <diretorio-do-servico> <repo-uri>
 # Exemplo: ./scripts/push-image.sh ms-payment-ingestor 789254323955.dkr.ecr.us-east-1.amazonaws.com/sqs-poc-ingestor
 

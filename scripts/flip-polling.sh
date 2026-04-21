@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# flip-polling.sh — alterna o billing entre long (20s) e short (0s) polling.
+# flip-polling.sh alterna o billing entre long (20s) e short (0s) polling.
 # Registra uma nova task definition revision com SQS_WAIT_TIME_SECONDS ajustado
-# e dispara rolling deployment. Sem dependência de jq — o JSON da task def é
-# reconstruído inline.
+# e dispara rolling deployment. Sem dependência de jq (o JSON da task def é
+# reconstruído inline).
 #
 # Uso: ./scripts/flip-polling.sh short|long
 

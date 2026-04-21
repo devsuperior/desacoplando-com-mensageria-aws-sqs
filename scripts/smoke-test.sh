@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# smoke-test.sh — valida o fluxo ingestor -> SQS -> billing em AWS real.
+# smoke-test.sh valida o fluxo ingestor -> SQS -> billing em AWS real.
 # Le os outputs das stacks, envia 1 pagamento com correlation-id unico, espera a fila zerar
 # e confirma o log correspondente no billing.
 

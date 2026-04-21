@@ -7,6 +7,20 @@ Enquanto o artigo sobe tudo localmente com LocalStack, aqui você provisionará 
 > 📘 **Guia completo passo a passo:** [DEMO.md](DEMO.md)  
 > 🔧 **Tuning do consumidor SQS (batch, polling, ack modes):** [TUNNING-SQS.md](TUNNING-SQS.md)
 
+## Sumário
+
+- [O que muda em relação ao artigo?](#o-que-muda-em-relação-ao-artigo)
+- [Arquitetura](#arquitetura)
+- [Pré-requisitos](#pré-requisitos)
+- [Deploy completo](#-deploy-completo)
+- [Smoke test](#-smoke-test)
+- [Teste de carga](#-teste-de-carga)
+- [Exemplos cURL](#-exemplos-curl)
+- [Onde focar](#-onde-focar)
+- [Cleanup](#-cleanup)
+
+---
+
 ## O que muda em relação ao artigo?
 
 - **Deploy na AWS:** Vamos utilizar o console AWS e o CLI para interagir com a nossa aplicação e a nossa fila.

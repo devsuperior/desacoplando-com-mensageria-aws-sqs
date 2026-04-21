@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# run_k6.sh — dispara teste de carga contra o ALB usando grafana/k6 em Docker.
+# run_k6.sh dispara teste de carga contra o ALB usando grafana/k6 em Docker.
 
 set -euo pipefail
 

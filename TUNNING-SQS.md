@@ -58,7 +58,7 @@ sequenceDiagram
 **Long polling é o default certo** para quase tudo em produção: menos chamadas, menos custo, menos ruído (e a AWS recomenda). Short polling tem lugar em cenários específicos, como:
 
 - **Testes automatizados** onde esperar 20s por uma fila vazia trava o ciclo de feedback.
-- **Funções serverless cobradas por tempo de execução** (AWS Lambda agendada, job de CI, script de cron que roda e sai) — nesses casos o consumidor existe por poucos segundos e não compensa pagar por 20s só esperando.
+- **Funções serverless cobradas por tempo de execução** (AWS Lambda agendada, job de CI, script de cron que roda e sai), onde o consumidor existe por poucos segundos e não compensa pagar por 20s só esperando.
 
 ### Teste prático: flip polling em runtime
 
@@ -102,7 +102,7 @@ aws cloudwatch get-metric-statistics \
 +----------------+-----------------------------+
 ```
 
-Long polling fica na faixa de 0-3 por minuto. Em short polling, salta para **1058/min** — cerca de 100× mais chamadas à API, sem benefício algum quando a fila está ociosa.
+Long polling fica na faixa de 0-3 por minuto. Em short polling, salta para **1058/min** (cerca de 100× mais chamadas à API, sem benefício algum quando a fila está ociosa).
 
 ### Tradução em custo
 
@@ -125,7 +125,7 @@ Volte para long polling antes de seguir:
 
 ## Consumo em batch (`max-messages-per-poll`)
 
-Não muda o handler — continua recebendo uma mensagem por invocação. O que muda é quantas mensagens chegam ao container em uma única chamada `ReceiveMessage`.
+Não muda o handler, continua recebendo uma mensagem por invocação. O que muda é quantas mensagens chegam ao container em uma única chamada `ReceiveMessage`.
 
 ```mermaid
 sequenceDiagram
@@ -172,7 +172,7 @@ flowchart LR
     C -->|MANUAL| Wait1[Aguarda ack manual]
 
     D -->|ON_SUCCESS| Back[Volta à fila após VisibilityTimeout]
-    D -->|ALWAYS| Perdida[DeleteMessage — perde msg]
+    D -->|ALWAYS| Perdida[DeleteMessage, perde msg]
     D -->|MANUAL| Wait2[Aguarda ack manual]
 ```
 
