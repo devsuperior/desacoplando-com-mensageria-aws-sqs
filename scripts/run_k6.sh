@@ -11,12 +11,14 @@ ALB_URL=$(aws cloudformation describe-stacks --region "$REGION" --stack-name sqs
   --query "Stacks[0].Outputs[?OutputKey=='LoadBalancerUrl'].OutputValue" --output text)
 
 echo "==> Teste de carga contra $ALB_URL"
-echo "    Stages: 20s ramp-up 24 VUs -> 70s 36 VUs -> 20s pico 48 VUs -> 10s ramp-down"
+echo "    Stages: 30s ramp-up 80 VUs -> 120s 150 VUs -> 30s pico 200 VUs -> 30s ramp-down"
 echo ""
 
 cd "$ROOT_DIR"
+# pwd -W retorna o path Windows nativo (C:/...) no GitBash; em Linux/macOS, cai no fallback.
+ROOT_MOUNT=$(pwd -W 2>/dev/null || pwd)
 MSYS_NO_PATHCONV=1 docker run --rm -i \
-  -v "$PWD:/workspace" \
+  -v "$ROOT_MOUNT:/workspace" \
   -w /workspace \
   -e BASE_URL="$ALB_URL" \
   grafana/k6:latest run k6/load-test.js

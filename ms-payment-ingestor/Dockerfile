@@ -7,6 +7,7 @@ COPY src/ src/
 RUN ./mvnw package -DskipTests -B
 
 FROM amazoncorretto:25-alpine
+ENV LANG=C.UTF-8 LC_ALL=C.UTF-8
 RUN addgroup -S spring && adduser -S spring -G spring
 USER spring:spring
 WORKDIR /app
